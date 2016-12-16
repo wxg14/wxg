@@ -1,0 +1,340 @@
+//#include"stdafx.h"
+#include "StreamAnalyzer.h"
+//#include "CoolLog.h"
+//#include "consts.h"
+//#include "GlobalData.h"
+#include <QString>
+
+
+
+//extern int GFrameCount;
+//extern int GValidateFrameCount;
+
+StreamAnalyzer::StreamAnalyzer()
+{
+	m_count = 0;
+	m_bA5flag = false;
+	m_b5Aflag = false;
+	m_b3Aflag = false;
+
+
+	m_size = 0;
+	m_intval = 0;
+
+	m_TotalReceivedBytes = 0;
+	m_receiveflag = false;
+	m_legalflag = false;
+	m_chipidInfront = true;
+
+	m_bReadID = true;
+	//是否是LPMS_B姿态模块
+	m_protocol = 0;
+}
+
+StreamAnalyzer::~StreamAnalyzer()
+{
+
+}
+
+void StreamAnalyzer::setReceiveFlag(bool avalue)
+{
+    m_receiveflag = avalue;
+}
+
+void StreamAnalyzer::chipidInfront(bool bvalue)
+{
+	m_chipidInfront = bvalue;
+}
+
+void StreamAnalyzer::setProtocol(byte protocol)
+{
+	m_protocol = protocol;
+}
+
+int StreamAnalyzer::getFrameCount()
+{
+    return m_frameCount;
+}
+
+int StreamAnalyzer::getValidateFrameCount()
+{
+	return m_validateFrameCount;
+}
+
+bool StreamAnalyzer::analyzeDataWithAHRSprotocol(const char* pdata, int nsize)//数据解析
+{
+	m_TotalReceivedBytes += nsize;
+	//PRINTF("StreamAnalyzer::newData received %d bytes", nsize);
+	bool bvalid = false;
+	for(int i=0;i<nsize;i++){
+
+		// 		if (true == m_bReadID)
+		// 		{
+		// 			m_chipID = pdata[i];
+		// 			m_bReadID = false;
+		//  		}
+
+		m_intval++;
+		byte c = byte(pdata[i]);
+
+		if ((!m_bA5flag) && (!m_b5Aflag))
+		{
+			if (c == 0xA5)
+			{
+				m_bA5flag = true;
+			}
+			else
+				m_bA5flag = false;
+		}
+		else if (m_bA5flag)
+		{
+			if (c == 0x5A)
+				m_b5Aflag = true;
+			else 
+				m_b5Aflag = false;
+			m_bA5flag = false;
+		}
+		else if (m_b5Aflag)
+		{
+			if (m_count == 0)
+			{
+				m_size = c;
+				if (m_b5Aflag)
+				{ 
+					m_packetBytes[m_count++] = c;
+				}
+			}
+			else if (m_count < m_size - 1){
+				if (m_count >= MAXPACKETSIZE)
+				{
+					m_count = 0;
+					m_b5Aflag = false;
+					break;
+				}
+				m_packetBytes[m_count++] = c;
+			}
+			else{
+				if (!checkOut(m_packetBytes))
+					emit message(QString("check error!"), QString("critical"));
+				else
+				{
+
+					byte nchipid;
+					if (m_chipidInfront) 
+						//nchipid = m_packetBytes[1] & ((1<<5) - 1);//modify by wxg
+					{
+						byte btChipID=m_packetBytes[2];
+						if(btChipID <= 128)
+						{
+							nchipid = btChipID;//1~17
+						}
+						else if(btChipID <= 147)
+						{
+							nchipid = btChipID - 129 + 24;//24~41
+						}
+						else if(btChipID <= 165)
+						{
+							nchipid = btChipID-148 + 42;//42~59
+						}
+					}
+					else
+						nchipid= m_packetBytes[m_size - 3]; //倒数第三个字节放ChipID
+					//gchipframecount[nchipid]++;
+					//ggframecount[nchipid]++;
+					//PRINTF("chipID: %d, framecount: %d", nchipid, gchipframecount[nchipid]);
+					//if (nchipid ==4)
+					//{
+					for (int j=0; j<m_count; j++)
+						m_cachebuffer[nchipid][j] = m_packetBytes[j];
+					emit newPacket(char(nchipid), (char*)(m_cachebuffer[nchipid]));//新数据通知主程序wxg1
+					//}
+
+
+					//emit newPacket(m_chipID, (char*)(m_cachebuffer[m_chipID]));
+					//  					if (false == m_bReadID)
+					//  					{				
+
+					//  						m_bReadID = true;
+					//  					}
+					//emit message(QString("check error!"), QString("critical"));
+					bvalid = true;
+				}
+				m_intval = 0;
+				m_count = 0;
+				m_b5Aflag = false;
+			}
+		}
+	}
+	if (m_TotalReceivedBytes > 200)
+		m_receiveflag = true;
+	return bvalid;
+}
+bool StreamAnalyzer::analyzeDataWithLPMSprotocol(const char* pdata, int nsize)
+{
+	m_TotalReceivedBytes += nsize;
+	//PRINTF("StreamAnalyzer::newData received %d bytes", nsize);
+	bool bvalid = false;
+	unsigned short ncommand;
+	for(int i=0;i<nsize;i++){
+		m_intval++;
+		byte c = byte(pdata[i]);
+		if (!m_b3Aflag)
+		{
+			if (c == 0x3A)
+			{
+				m_b3Aflag = true;
+				m_count = 0;
+			}
+		}
+		else if (m_b3Aflag)
+		{
+			if (m_count == 0)
+			{
+				m_chipID = c;
+				m_packetBytes[m_count++] = c;
+			}
+			else if (m_count == 1){
+				m_packetBytes[m_count++] = c;
+			}
+			else if (m_count == 2)
+			{
+				ncommand = c;
+				m_packetBytes[m_count++] = c;
+			}
+			else if (m_count == 3)
+			{
+				ncommand = (c<<8) + ncommand;
+				m_packetBytes[m_count++] = c;
+			}
+			else if (m_count == 4)
+			{
+				m_size = c;
+				m_packetBytes[m_count++] = c;
+			}
+			else if (m_count == 5)
+			{
+                m_size = (c<<8) + m_size;
+				m_packetBytes[m_count++] = c;
+				if (m_size != 80)
+				{
+					m_count = 0;
+					m_b3Aflag = false;
+					continue;
+				}
+			}
+			else if ((m_count - 6) < (m_size + 2))
+			{
+				if (m_count >= MAXPACKETSIZE)
+				{
+					m_count = 0;
+					m_b3Aflag = false;
+					continue;
+				}
+				m_packetBytes[m_count++] = c;
+			}
+			else{
+				if (!checkOut(m_packetBytes))
+					emit message(QString("check error!"), QString("critical"));
+				else
+				{
+					if (m_chipID > -1 && m_chipID < MAXCHIPCOUNT)
+					{
+						for (int j=0; j<m_count; j++)
+							m_cachebuffer[m_chipID][j] = m_packetBytes[j];
+						emit newPacket(char(m_chipID), (char*)(m_cachebuffer[m_chipID]));
+						bvalid = true;
+					}
+
+					
+				}
+				m_intval = 0;
+				m_count = 0;
+				m_b3Aflag = false;
+			}
+		}
+	}
+	if (m_TotalReceivedBytes > 200)
+		m_receiveflag = true;
+	return bvalid;
+}
+//int ggframecount[40] = {0};
+bool StreamAnalyzer::newData(const char* pdata, int nsize)//UDP接收回调触发
+{
+	if (m_protocol == CAHRSPROTOCOL)
+	{
+		return analyzeDataWithAHRSprotocol(pdata, nsize);
+	}
+	else if (m_protocol == CLPMSPROTOCOL)
+	{
+        return analyzeDataWithLPMSprotocol(pdata, nsize);
+	}
+	else
+	{
+		//assert(false);
+		//do nothings;
+	}
+}
+
+bool StreamAnalyzer::newData(const QByteArray& newBytes)
+{
+	return newData(newBytes.data(), newBytes.length());
+}
+
+
+bool StreamAnalyzer::isMPU6050Port()
+{
+	while (!m_receiveflag);
+	return m_legalflag;
+}
+//校验接收到的数据包是否合法
+bool StreamAnalyzer::checkOut(byte* packetBytes)
+{
+	if (m_protocol == CAHRSPROTOCOL)
+	{
+		byte framesize;//帧字节数，不包括开始的两个字节
+
+		m_frameCount++;
+		framesize = packetBytes[0];
+		unsigned int temp=0;
+		for (int i=0; i<framesize - 2; i++)
+		{
+			temp+=byte(packetBytes[i]);
+		}
+		bool rslt = (temp%256 == byte(packetBytes[framesize - 2]));
+		if (rslt)
+		{
+			m_validateFrameCount++;
+			m_legalflag = true;
+			//PRINTF(CCHECKOUTSUCCEED);
+		}
+		//else
+		//	PRINTF(CCHECKOUTFAILED);
+		return rslt;
+	}
+	else if (m_protocol == CLPMSPROTOCOL)
+	{
+		byte framesize;
+		m_frameCount++;
+		framesize = (packetBytes[5]<<8) + packetBytes[4] + 6;
+		unsigned int temp=0;
+		for (int i=0; i<framesize; i++)
+		{
+			temp+=byte(packetBytes[i]);
+		}
+		bool rslt = (temp%65536 == (unsigned short)((packetBytes[framesize+1] <<8) + packetBytes[framesize]));
+		if (rslt)
+		{
+			m_validateFrameCount++;
+			m_legalflag = true;
+			//PRINTF(CCHECKOUTSUCCEED);
+		}
+		//else
+		//	PRINTF(CCHECKOUTFAILED);
+        return rslt;
+	}
+	else
+	{
+		return false;
+	}
+
+}
