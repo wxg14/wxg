@@ -105,8 +105,9 @@ void MPU6050Calculator::maskcali()
 			else if(m_iBodyPart == 0)
 			{
 				newPosition(-1,0,0,0);
-				m_sender->hipsPosChange(-1, -1, -1);//wxg
+				
 			}
+			m_sender->hipsPosChange(-1, -1, -1);//wxg
 
 			//if(m_iBodyPart==1)//wxg ÊÖÖ¸µÄyawÖá³¯ÏòÊÖÍó
 			//	postyaw = preyaw-m_angleinc;
@@ -309,8 +310,9 @@ osg::Quat MPU6050Calculator::CalcuQuat(double yaw, double pitch, double roll)//Ï
 //	if(m_abscali)
 	{
 		double baseyaw = 0;
-		double basepitch = 0;	// add by mvp ## 2015-9-7
+		double basepitch = 0;	// pitct ÒÑ¾­ÐÞÕý¹ýÁË
 		double baseroll = 0;
+		
 		if(m_iBodyPart>0)
 		{	
 	// 		int iUnitDegree=15;
@@ -334,9 +336,7 @@ osg::Quat MPU6050Calculator::CalcuQuat(double yaw, double pitch, double roll)//Ï
 	// 		else if(m_iBodyPart ==2)
 	// 			baseyaw = yaw0 + iOffsetDegree; 
 
-
 			baseyaw = postyaw[m_iBodyPart];
-			basepitch = postpitch[m_iBodyPart];
 		}
 		else
 		{
@@ -365,9 +365,16 @@ osg::Quat MPU6050Calculator::CalcuQuat(double yaw, double pitch, double roll)//Ï
 
 			//wxg20161007 test
 			if(m_SegmentLabel == 14 && postyaw[1] != 361)
+			{
 				baseyaw = postyaw[1];
+				//basepitch = fLeftBasePitch;
+			}
 			else if(m_SegmentLabel == 10 && postyaw[2] != 361)
+			{
 				baseyaw = postyaw[2];
+				//basepitch = fRightBasePitch;
+			}
+				
 		}
 
 	// 	if(m_iBodyPart>0)

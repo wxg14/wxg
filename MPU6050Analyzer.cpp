@@ -363,7 +363,7 @@ void MPU6050Analyzer::maskGyrOffset(int gx, int gy, int gz)
 	}
 }
 
-void MPU6050Analyzer::analyzePacketWithAHRSProtocol(byte chipID, byte* packetBytes)//主程序收到信号后进行数据分析 wxg3
+void MPU6050Analyzer::analyzePacketWithAHRSProtocol(byte chipID, byte* packetBytes)//主程序收到信号后进行数据分析 wxg3 
 {
 	double yaw0, pitch0, roll0, yaw1, pitch1, roll1;
 
@@ -373,6 +373,7 @@ void MPU6050Analyzer::analyzePacketWithAHRSProtocol(byte chipID, byte* packetByt
 	bool bAccFlag= (framefun&0x10)==0x10;
 	byte btVer = framefun>>5;	// if the version >= 8 ,error come // marked by mvp ## 2015-8-6
 	byte btChipID = packetBytes[2];//整个字节用来表示ID ，1 - 128为动捕服的，129 - 129+17为左手 128+19 - 129+35为右手
+
 	// m_chipID = chipID;
 	if (m_chipidinfront == 1)
 	{
@@ -411,6 +412,7 @@ void MPU6050Analyzer::analyzePacketWithAHRSProtocol(byte chipID, byte* packetByt
 			}
 			m_iBodyPartIndex = 2;
 		}
+
 		//if (((framefun >> 5)&1) == 1)
 		if(btDataType == 1)//解算后的欧拉角
 		{

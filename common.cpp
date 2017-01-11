@@ -8,9 +8,13 @@
 
 #include <math.h>
 #include<time.h>
+#include "quatutils.h"
+
+#include "CoolLog.h"
 
 #include "calibration.h"
 bool qcommon::m_bInited = false;
+//CalcConfig* qcommon::m_pCC = NULL;
 
 //返回exe目录，需要调用的地方释放内存
 TCHAR * qcommon::GetExePath_C()
@@ -648,3 +652,529 @@ void CenterAndRadiusAlgorithm(vector<osg::Vec3d> composlist,float &resultx,float
 	return;
 }
 //*/
+
+//void qcommon::ModifyData(int iBodyPart,osg::Quat* _segment,bool bShortMode,bool bFollowRoot,bool bRootRepair,bool bThumbRepair,float* fParamYaw)
+void qcommon::ModifyData(int iBodyPart,osg::Quat* _segment,const CalcSetting* pSetting)
+{
+	////夹心旋转 将整个机体坐标系做一个旋转(如：绕yaw=90的四元数旋转另一个四元数，则表示该四元数yaw不变，pitch=roll0、roll=-pitch0)
+	double pi = 3.14159265358979;
+	osg::Quat quat;
+	int iHandID=10;
+	double yawSum=0.0;
+	double yaw_new=0 ,pitch_new=0,roll_new=0;
+	static int iStep=0;
+	iStep++;
+
+	if(iBodyPart == 1)
+	{			
+		iHandID=14;
+		if(fabs(pSetting->fParamYaw[iHandID]) > 0.0001)
+		{
+			quat = _segment[iHandID];
+			double yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+			osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(fabs(yaw_new)*pSetting->fParamYaw[iHandID], 0, 0 ,0, 0, 0,4);
+
+// 			if(iStep % 1000 == 0)
+// 			{
+// 				quat = _segment[14];
+// 				yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 				pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 				roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 				PRINTF("***** 14 ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 				PRINTF("----------------------------------paramYaw14 %f",fabs(yaw_new)*pSetting->fParamYaw[iHandID]);
+// 			}
+			//_segment[iHandID] = quat3.inverse() * _segment[iHandID]* quat3;
+			_segment[iHandID] =  _segment[iHandID] * quat3;//quat3 * _segment[iHandID] 效果是一样的
+		}
+		for (int i=24; i<39; i++)
+		{
+			//wxgtest 通过配置来修正航向不准的问题，等比
+			if(fabs(pSetting->fParamYaw[i]) > 0.0001)
+			{
+				quat = _segment[i];
+				double yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+				osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(fabs(yaw_new)*pSetting->fParamYaw[i], 0, 0 ,0, 0, 0,4);
+				//_segment[i] = quat3.inverse() * _segment[i]* quat3;
+				_segment[i] = quat3 * _segment[i];
+				_segment[i] = _segment[i] * quat3;
+			}
+		}
+		//算出各指与手背航向的平均差值 中指+食指+无名
+		//if(pSetting->bRootRepair)
+		{
+			for(int j=1;j<10;j++)
+			{
+				if(j%3!=0)
+				{
+					quat = _segment[iHandID]*_segment[26+j].inverse();
+					double yaw_delta = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+					yawSum += yaw_delta;
+				}
+			}
+		}
+		float fThumbYaw=0.0;
+		for (int i=24; i<39; i++)
+		{
+			if((i-24)%3 == 0 && i>26)//wxg20160901 
+			{
+				float fRatio=0.5,fCorrectRatio=0;
+
+				for(int m=0;m<3;m++)
+				{
+					if(m==2)
+					{
+						//if(m_bFollowRoot  && i!=36)//小指初始是斜的，有问题
+						if(pSetting->bFollowRoot)//小指初始是斜的，有问题
+						{ 
+							//各指与手背同pitch 同时用各指与手背航向的平均差值(yawSum/6.0)来修正航向
+							quat = _segment[iHandID]*_segment[i+m-2].inverse();
+							double pitch_delta = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+							osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yawSum/6.0, pitch_delta,0 ,4);
+							_segment[i+m-2] = quat3 * _segment[i+m-2];
+							_segment[i+m-1] = quat3 * _segment[i+m-1];
+
+							
+							//与指根或手背同航向
+							quat = _segment[iHandID]*_segment[i+m-2].inverse();
+							double yaw_delta = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+
+							//pitch_delta = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+							pitch_delta = 0.0;
+
+							quat = _segment[i+m-1]*_segment[i+m-2].inverse();
+							yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 			
+							//pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+							roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+							// 
+							// 	
+							fCorrectRatio = 1-fabs(roll_new)/90 ;
+							if(fCorrectRatio<0) fCorrectRatio=0;
+							yaw_delta = fCorrectRatio*(yaw_new/2) + (1-fCorrectRatio)*yaw_delta;//根据弯曲程度，设置根节点（两节点的中间值）和手背的权重，决定向谁靠拢
+
+							if(i!=36)
+								fThumbYaw += yaw_delta;//大姆指根据这个平均数做修正
+							else
+							{
+								osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,fThumbYaw/3.0, 0,0 ,4);
+								_segment[24] = quat3  * _segment[24];
+								_segment[25] = quat3  * _segment[25];
+								_segment[26] = quat3  * _segment[26];
+							}
+
+							//修改指根的pitch是为了握拳时各指尖向掌心靠拢
+							if(i == 36)
+								pitch_delta-=30;
+							else if(i==33)
+								pitch_delta-=15;
+							else if(i==27)
+								pitch_delta+=15;
+							quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yaw_delta, pitch_delta,0 ,4);//航向取两个节点的平均值20161128 
+							_segment[i+m-2] = quat3 * _segment[i+m-2];
+
+							//第2节参考第1节
+							quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,0, 0,roll_new ,4);
+							_segment[i+m-1] = quat3 * _segment[i+m-2];
+						}
+
+						//估算第三指节
+						if(pSetting->bShortMode)
+						{
+							quat = quatutils::slerp(_segment[i+m-2], _segment[i+m-1],0.5);
+							quat  = quat*_segment[i+m-2].inverse();//
+							roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+							fRatio = fabs(roll_new)/40;//40第2节与第一节的弯曲度
+							if(i == 36)
+							{
+								if(fRatio>1)  fRatio=1;
+							}
+							else
+							{
+								if(fRatio>0.8) fRatio=0.8;
+							}
+
+							quat = quatutils::slerp(_segment[i+m-2], _segment[i+m-1],fRatio);		
+							quat  = quat*_segment[i+m-2].inverse();
+
+							_segment[i+m] = quat*_segment[i+m-1];
+						}
+					}
+					else
+					{
+					}
+				}
+				//手背节点纠正wxg20161118
+// 				if( i == 30 )
+// 				{
+// 					//test
+// 					if(iStep % 1000 == 0)
+// 					{
+// 						quat = _segment[i];
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 30 ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 						quat = _segment[14];
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 14 ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 						quat = _segment[i]*_segment[14].inverse();
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 30/14 ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 
+// 						osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,90, 0, 0,4);
+// 						quat = _segment[14];
+// 						quat = quat3 * quat;
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 14(+90度) ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 
+// 						quat = _segment[14];
+// 						quat =  quat * quat3;
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 14(+90度)*反 ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 
+// 						quat = _segment[14];
+// 						quat = quat3.inverse() * quat * quat3;
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 14(+90度 夹心) ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);
+// 
+// 						quat = _segment[14];
+// 						quat = quat3 * quat * quat3.inverse();
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						PRINTF("***** 14(+90度 反夹心) ****yaw = %f,pitch = %f,roll = %f",yaw_new,pitch_new,roll_new);							
+// 					}
+// 				}
+			}
+			else if(i <= 26)
+			{
+				//wxgtest 通过配置来修正航向不准的问题，等比
+				int m=0;
+
+				//修正各指与手背航向的平均差值(yawSum/6.0)
+				osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yawSum/6.0, 0,0 ,4);
+				_segment[i] = quat3 * _segment[i];	
+			}
+		}
+
+		//整体偏移与动捕一致
+		if(fabs(pSetting->fLeftHandYawOffset)>0.0001 )
+		{
+			float fHandYawOffset = pSetting->fLeftHandYawOffset;//pSetting->fHandYawOffset
+			osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,fHandYawOffset, 0,0 ,4);//test 90
+			for (int i=24; i<39; i++)
+			{
+				_segment[i] = _segment[i] * quat3;	
+			}
+			_segment[14] = _segment[14] * quat3;
+		}
+
+	}
+
+	if(iBodyPart == 2)
+	{
+// 		for (int i=42; i<57; i++)
+// 		{
+// 			//wxg[2016-9-3]add屏蔽未端节点
+// 			if(pSetting->bShortMode)
+// 			{
+// 				if((i-42)%3 == 0 && i>44)//wxg20160901 test
+// 				{
+// 					float fRatio=0.5,fCorrectRatio=0;
+// 					for(int m=0;m<3;m++)
+// 					{
+// 						if(m==2)
+// 						{
+// 							//if(m_bFollowRoot && i!=54)
+// 							if(pSetting->bFollowRoot)
+// 							{
+// 								quat = _segment[48]*_segment[i+m-2].inverse();
+// 								double pitch_delta = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 								{
+// 									osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,0, pitch_delta,0 ,4);
+// 									_segment[i+m-2] = quat3 * _segment[i+m-2];//*quat3.inverse();//各指与中指同pitch 
+// 									_segment[i+m-1] = quat3 * _segment[i+m-1];//*quat3.inverse();
+// 
+// 								}
+// 								//else
+// 								{
+// 									quat = _segment[48]*_segment[i+m-2].inverse();
+// 									double yaw_delta = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+// 									pitch_delta = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 
+// 									quat = _segment[i+m-1]*_segment[i+m-2].inverse();
+// 									yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 			
+// 									//pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 									roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 									// 
+// 									// 	
+// 									fCorrectRatio = 1-fabs(roll_new)/90 ;
+// 									if(fCorrectRatio<0) fCorrectRatio=0;
+// 									yaw_delta = fCorrectRatio*(yaw_new/2) + (1-fCorrectRatio)*yaw_delta;
+// 									//osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(yaw_new*fCorrectRatio, pitch_new*fCorrectRatio, 0 ,0, 0, 0,4);
+// 									//_segment[i+m-1] = quat3 * _segment[i+m-1];
+// 									if(i == 54)
+// 										pitch_delta+=30;
+// 									else if(i==51)
+// 										pitch_delta+=15;
+// 									else if(i==45)
+// 										pitch_delta-=15;
+// 									//osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yaw_delta, pitch_delta,0 ,4);//航向取两个节点的平均值20161128
+// 									osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(yaw_delta, pitch_delta, 0 ,0, 0,0 ,4);//航向取两个节点的平均值
+// 									_segment[i+m-2] = quat3 * _segment[i+m-2];
+// 									quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,0, 0,roll_new ,4);
+// 									_segment[i+m-1] = quat3 * _segment[i+m-2];
+// 								}
+// 							}
+// 
+// 							quat = quatutils::slerp(_segment[i+m-2], _segment[i+m-1],fRatio);
+// 							quat  = quat*_segment[i+m-2].inverse();//
+// 							roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 							////_segment[i+m] = quat*_segment[i+m-1]*quat.inverse();
+// 							fRatio = fabs(roll_new)/40;
+// 							if(fRatio>0.8) fRatio=0.8;
+// 							quat = quatutils::slerp(_segment[i+m-2], _segment[i+m-1],fRatio);
+// 							quat  = quat*_segment[i+m-2].inverse();
+// 
+// 							_segment[i+m] = quat*_segment[i+m-1];
+// 
+// 						}
+// 						else
+// 						{
+// 							//wxgtest 通过配置来修正航向不准的问题，等比
+// 							//int m=0;
+// 							if(fabs(pSetting->fParamYaw[i+m]) > 0.0001)
+// 							{
+// 								quat = _segment[i+m];
+// 								yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+// 								osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(fabs(yaw_new)*pSetting->fParamYaw[i+m], 0, 0 ,0, 0, 0,4);
+// 								_segment[i+m] = quat3.inverse() * _segment[i+m]* quat3;
+// 							}
+// 						}
+// 					}
+// 					//手背节点纠正wxg20161118
+// 					if(i == 48 && pSetting->bRootRepair)
+// 					{
+// 						quat = _segment[i]*_segment[10].inverse();
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						//yaw_new += GetYawOffset(false);
+// 						osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yaw_new, pitch_new, 0,4);
+// 						_segment[10] = quat3 * _segment[10];
+// 
+// 						//大姆指也要同步
+// 						_segment[42] = quat3*_segment[42];
+// 						_segment[43] = quat3*_segment[43];
+// 						_segment[44] = quat3*_segment[44];
+// 					}
+// 				}
+// 				else if(i<=44)
+// 				{
+// 					//wxgtest 通过配置来修正航向不准的问题，等比
+// 					int m=0;
+// 					if(fabs(pSetting->fParamYaw[i+m]) > 0.0001)
+// 					{
+// 						quat = _segment[i+m];
+// 						double yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+// 						osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(fabs(yaw_new)*pSetting->fParamYaw[i+m], 0, 0 ,0, 0, 0,4);
+// 						_segment[i+m] = quat3.inverse() * _segment[i+m]* quat3;
+// 					}
+// 					if(i==44 && pSetting->bThumbRepair)
+// 					{
+// 						double yaw_new=0 ,pitch_new=0,roll_new=0;
+// 
+// 						quat = _segment[42]*_segment[10].inverse();
+// 						yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 
+// 						pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+// 						roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+// 						double fYawRatio=0,fRollRatio=0;
+// 						if(roll_new+15 > 0 )
+// 						{
+// 							// 											if(pitch_new>0)
+// 							// 												fRollRatio = roll_new/(15+pitch_new*3);
+// 							// 											else
+// 							fRollRatio = (roll_new+15)/30;
+// 							if(fRollRatio > 1)
+// 								fRollRatio = 1;
+// 						}
+// 						//osg::Quat quat4 = quatutils::CalcQuatBetweenTwoEulor( 0, 0, 0 ,45*fYawRatio-45*fRollRatio,0, 45*fRollRatio,4);
+// 						osg::Quat quat4 = quatutils::CalcQuatBetweenTwoEulor( 0, 0, 0 ,-30*fRollRatio,10*fRollRatio, 20*fRollRatio,4);
+// 						//_segment[i-1] = quat4 * quat3 * _segment[i-1];
+// 						_segment[42] = quat4  * _segment[42];
+// 						_segment[43] = quat4  * _segment[43];
+// 						_segment[44] = quat4  * _segment[44];
+// 						// 										if(m_bDetailLog && istep%50 == 0)
+// 						// 											PRINTF("==============i = 42/10 yaw=%f,pitch = %f, roll=%f  ",yaw_new,pitch_new,roll_new);
+// 
+// 					}
+// 
+// 				}
+// 			}////////////////////////////////////
+// 		}					
+		iHandID=10;
+		if(fabs(pSetting->fParamYaw[iHandID]) > 0.0001)
+		{
+			quat = _segment[iHandID];
+			double yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+			osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(fabs(yaw_new)*pSetting->fParamYaw[iHandID], 0, 0 ,0, 0, 0,4);
+
+			//_segment[iHandID] = quat3.inverse() * _segment[iHandID]* quat3;
+			_segment[iHandID] =  _segment[iHandID] * quat3;//quat3 * _segment[iHandID] 效果是一样的
+		}
+		for (int i=42; i<57; i++)
+		{
+			//wxgtest 通过配置来修正航向不准的问题，等比
+			if(fabs(pSetting->fParamYaw[i]) > 0.0001)
+			{
+				quat = _segment[i];
+				double yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+				osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(fabs(yaw_new)*pSetting->fParamYaw[i], 0, 0 ,0, 0, 0,4);
+				//_segment[i] = quat3.inverse() * _segment[i]* quat3;
+				_segment[i] = quat3 * _segment[i];
+				_segment[i] = _segment[i] * quat3;
+			}
+		}
+		//算出各指与手背航向的平均差值 中指+食指+无名
+		//if(pSetting->bRootRepair)
+		{
+			for(int j=1;j<10;j++)
+			{
+				if(j%3!=0)
+				{
+					quat = _segment[iHandID]*_segment[44+j].inverse();
+					double yaw_delta = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+					yawSum += yaw_delta;
+				}
+			}
+		}
+		float fThumbYaw=0.0;
+		for (int i=42; i<57; i++)
+		{
+			if((i-42)%3 == 0 && i>44)//wxg20160901 
+			{
+				float fRatio=0.5,fCorrectRatio=0;
+
+				for(int m=0;m<3;m++)
+				{
+					if(m==2)
+					{
+						//if(m_bFollowRoot  && i!=36)//小指初始是斜的，有问题
+						if(pSetting->bFollowRoot)//小指初始是斜的，有问题
+						{ 
+							//各指与手背同pitch 同时用各指与手背航向的平均差值(yawSum/6.0)来修正航向
+							quat = _segment[iHandID]*_segment[i+m-2].inverse();
+							double pitch_delta = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+							osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yawSum/6.0, pitch_delta,0 ,4);
+							//osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(yawSum/6.0, pitch_delta, 0 ,0, 0,0 ,4);
+							_segment[i+m-2] = quat3 * _segment[i+m-2];
+							_segment[i+m-1] = quat3 * _segment[i+m-1];
+
+
+							//与指根或手背同航向
+							quat = _segment[iHandID]*_segment[i+m-2].inverse();
+							double yaw_delta = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 	
+
+							//pitch_delta = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+							pitch_delta = 0.0;
+
+							quat = _segment[i+m-1]*_segment[i+m-2].inverse();
+							yaw_new = atan2(2 * quat.z() * quat.x() + 2 * quat.w() * quat.y(), -2 * quat.y()*quat.y() - 2 * quat.x() * quat.x() + 1)* 180/pi; // yaw 			
+							//pitch_new = asin(-2 * quat.y() * quat.z() + 2 * quat.w() * quat.x())* 180/pi; // pitch
+							roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+							// 
+							// 	
+							fCorrectRatio = 1-fabs(roll_new)/90 ;
+							if(fCorrectRatio<0) fCorrectRatio=0;
+							yaw_delta = fCorrectRatio*(yaw_new/2) + (1-fCorrectRatio)*yaw_delta;//根据弯曲程度，设置根节点（两节点的中间值）和手背的权重，决定向谁靠拢
+
+							if(i!=54)
+								fThumbYaw += yaw_delta;//大姆指根据这个平均数做修正
+							else
+							{
+								osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,fThumbYaw/3.0, 0,0 ,4);
+								_segment[42] = quat3  * _segment[42];
+								_segment[43] = quat3  * _segment[43];
+								_segment[44] = quat3  * _segment[44];
+							}
+
+							//修改指根的pitch是为了握拳时各指尖向掌心靠拢
+							if(i == 54)
+								pitch_delta-=30;
+							else if(i==51)
+								pitch_delta-=15;
+							else if(i==45)
+								pitch_delta+=15;
+							//quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yaw_delta, pitch_delta,0 ,4);//航向取两个节点的平均值20161128 
+							quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yaw_delta, pitch_delta,0 ,4);//航向取两个节点的平均值
+							_segment[i+m-2] = quat3 * _segment[i+m-2];
+
+							//第2节参考第1节
+							quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,0, 0,roll_new ,4);
+							_segment[i+m-1] = quat3 * _segment[i+m-2];
+						}
+
+						//估算第三指节
+						if(pSetting->bShortMode)
+						{
+							quat = quatutils::slerp(_segment[i+m-2], _segment[i+m-1],0.5);
+							quat  = quat*_segment[i+m-2].inverse();//
+							roll_new = atan2(2 * quat.x() * quat.y() + 2 * quat.w() * quat.z(), -2 * quat.x() * quat.x() - 2 * quat.z() * quat.z() + 1)* 180/pi; // roll 握拳
+							fRatio = fabs(roll_new)/40;//40第2节与第一节的弯曲度
+							if(i == 54)
+							{
+								if(fRatio>1)  fRatio=1;
+							}
+							else
+							{
+								if(fRatio>0.8) fRatio=0.8;
+							}
+
+							quat = quatutils::slerp(_segment[i+m-2], _segment[i+m-1],fRatio);		
+							quat  = quat*_segment[i+m-2].inverse();
+
+							_segment[i+m] = quat*_segment[i+m-1];
+						}
+					}
+					else
+					{
+					}
+				}
+				//手背节点纠正wxg20161118
+				if( i == 48 )
+				{
+
+				}
+			}
+			else if(i <= 44)
+			{
+				//wxgtest 通过配置来修正航向不准的问题，等比
+				int m=0;
+
+				//修正各指与手背航向的平均差值(yawSum/6.0)
+				osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,yawSum/6.0, 0,0 ,4);
+				_segment[i] = quat3 * _segment[i];	
+			}
+		}
+
+		//整体偏移与动捕一致
+		if(fabs(pSetting->fRightHandYawOffset)>0.0001 )
+		{
+			float fHandYawOffset = pSetting->fRightHandYawOffset;//pSetting->fHandYawOffset
+			osg::Quat quat3 = quatutils::CalcQuatBetweenTwoEulor(0, 0, 0 ,fHandYawOffset, 0,0 ,4);//test 90
+			for (int i=42; i<57; i++)
+			{
+				_segment[i] = _segment[i] * quat3;	
+			}
+			_segment[10] = _segment[10] * quat3;
+		}
+	}
+}
